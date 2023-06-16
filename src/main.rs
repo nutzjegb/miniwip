@@ -1,6 +1,6 @@
 use crossterm::{
     execute,
-    event::{Event, EventStream, KeyCode},
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     queue,
     Result,
     cursor,
@@ -85,18 +85,60 @@ fn exit() -> Result<()> {
     Ok(())
 }
 
-//fn handle_key_event(key_event: KeyEvent, opt: &Opt) -> Result<Option<Bytes>> {
-//    Ok(None)
-//}
-
-fn print(c: char) -> Result<()> {
+fn print(buf: Vec<u8>) -> Result<()> {
     let mut stdout = stdout();
 
-    //TODO is menu is display, buffer it
+    //TODO if menu is displayed, buffer it
     //display it after the menu is closed
 
-    execute!(stdout, Print(c))?;
+    // let utf8_str = String::from_utf8(buf)
+    //     .map_err(|non_utf8| String::from_utf8_lossy(non_utf8.as_bytes()).into_owned());
+    let str = String::from_utf8_lossy(&buf);
+    execute!(stdout, Print(str))?;
     Ok(())
+}
+
+fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
+    //let mut vec: Vec<u8> = Vec::new();
+
+    let esc: u8 = b'\x1b';
+
+    /* Note, rust does not has some C-escape codes like \b or \e */
+    let key_str: Option<Vec<u8>> = match key_event.code {
+        KeyCode::Backspace => Some(Vec::from([b'\x08'])),
+        KeyCode::Enter => Some(Vec::from([b'\r', b'\n'])),
+        KeyCode::Left => todo!(),
+        KeyCode::Right => todo!(),
+        KeyCode::Up => todo!(),
+        KeyCode::Down => todo!(),
+        KeyCode::Home => todo!(),
+        KeyCode::End => todo!(),
+        KeyCode::PageUp => todo!(),
+        KeyCode::PageDown => todo!(),
+        KeyCode::Tab => Some(Vec::from([b'\t'])),
+        KeyCode::BackTab => todo!(),
+        KeyCode::Delete => todo!(),
+        KeyCode::Insert => todo!(),
+        KeyCode::F(_) => todo!(),
+        KeyCode::Char(ch) => {
+            //TODO
+            //if key_event.modifiers & KeyModifiers::CONTROL == KeyModifiers::CONTROL {
+            //}
+            Some(Vec::from([ch as u8]))
+        },
+        KeyCode::Null => Some(Vec::from([b'\0'])),
+        KeyCode::Esc => Some(Vec::from([esc])),
+        KeyCode::CapsLock => None,
+        KeyCode::ScrollLock => None,
+        KeyCode::NumLock => None,
+        KeyCode::PrintScreen => None,
+        KeyCode::Pause => None,
+        KeyCode::Menu => None,
+        KeyCode::KeypadBegin => todo!(),
+        KeyCode::Media(_) => None,
+        KeyCode::Modifier(_) => None,
+    };
+    Ok(key_str)
 }
 
 async fn event_handler(cli: Cli) -> Result<()> {
@@ -104,54 +146,30 @@ async fn event_handler(cli: Cli) -> Result<()> {
 
     loop {
         //let mut delay = Delay::new(Duration::from_millis(1_000)).fuse();
-        let mut event = reader.next().fuse();
+        let mut input_event = reader.next().fuse();
 
         select! {
             //_ = delay => { println!(".\r"); },
-            maybe_event = event => {
+            maybe_event = input_event => {
                 match maybe_event {
                     Some(Ok(event)) => {
                         if let Event::Key(key_event) = event {
-                            match key_event.code {
-                                KeyCode::Esc => break,
-                                    KeyCode::Enter => {
-                                        //TODO print buffer
-                                        print('\n')?;
-                                        print('\r')?;
-                                    },
-                                    KeyCode::Char(ch) => {
-                                        if ch == 'q' {
-                                            break;
-                                        } else {
-                                            print(ch)?;
-                                        }
-                                    },
-                                    _ => {
-                                        println!("uncaught keycode?: {:?}", key_event);
-                                        break;
-                                    },
+                            /* Check for CTRL-A */
+                            if let KeyCode::Char(c) = key_event.code {
+                                if c == 'a' && key_event.modifiers & KeyModifiers::CONTROL == KeyModifiers::CONTROL {
+                                    //TODO implement app logic
+                                    //for now quit
+                                    break;
+                                }
                             }
-                        } else {
-                            println!("Unknown event? {:?}", event);
+
+                            if let Some(data) = key_event_to_bytes(key_event)? {
+                                print(data)?;
+                            }
                         }
-                        //if event == Event::Key(KeyCode::Enter.into()) {
-                        //    print('\n')?;
-                        //    print('\r')?;
-                        //}
-                        //else if event == Event::Key(KeyCode::Esc.into()) {
-                        //    break;
-                        //}
-                        //else if event == Event::Key(KeyCode::Char('q').into()) {
-                        //    break;
-                        //}
-                        //else if let Event::Key(key_event) = event {
-                        //    
-                        //    //println!("Event::{:?}\r", event);
-                        //    //print(key_event.code)?;
-                        //}
-                    }
+                    },
                     Some(Err(e)) => println!("Error: {:?}\r", e),
-                        None => break,
+                    None => break,
                 }
             }
         };
@@ -169,7 +187,8 @@ async fn main_app() -> Result<()> {
     println!("some dummy text 1");
 
     //TODO pass stdout instead
-    
+    //TODO handle errors
+
     print_startup_stuff()?;
     terminal::enable_raw_mode()?;
 
