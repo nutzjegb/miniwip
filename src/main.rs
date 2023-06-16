@@ -1,19 +1,16 @@
+use clap::{crate_name, crate_version, Parser};
 use crossterm::{
-    execute,
-    event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
-    queue,
-    Result,
     cursor,
-    terminal::{
-        self, size,
-    },
-    tty::IsTty,
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
+    execute, queue,
     style::Print,
+    terminal::{self, size},
+    tty::IsTty,
+    Result,
 };
-use clap::{Parser, crate_name, crate_version};
 use futures::{future::FutureExt, select, StreamExt};
-use std::path::PathBuf;
 use std::io::{stdout, Write};
+use std::path::PathBuf;
 //use tokio::select;
 
 #[derive(Parser)]
@@ -31,13 +28,18 @@ struct Cli {
 fn print_banner() -> Result<()> {
     let mut stdout = stdout();
     let is_tty = stdout.is_tty();
-    let help = if is_tty { 
+    let help = if is_tty {
         "Press CTRL-A Z for help on special keys\n\n"
-    } else { 
+    } else {
         "TTY not detected, fancy menus are disabled (hint use CTRL-A Q to quit)\n\n"
     };
 
-    let banner = "Welcome to ".to_owned() + crate_name!() + " " + crate_version!() + "\n\nPort /dev/pts/0, 16:14:24\n" + help;
+    let banner = "Welcome to ".to_owned()
+        + crate_name!()
+        + " "
+        + crate_version!()
+        + "\n\nPort /dev/pts/0, 16:14:24\n"
+        + help;
 
     //TODO print correct time
     //TODO print correct port
@@ -51,19 +53,23 @@ fn print_startup_stuff() -> Result<()> {
     let is_tty = stdout.is_tty();
 
     if is_tty {
-        queue!(stdout,
+        queue!(
+            stdout,
             terminal::Clear(terminal::ClearType::All),
-            cursor::MoveTo(0, 0))?;
+            cursor::MoveTo(0, 0)
+        )?;
     }
     print_banner()?;
 
     if is_tty {
         let (_cols, rows) = size()?;
-        execute!(stdout,
+        execute!(
+            stdout,
             cursor::SavePosition,
             cursor::MoveTo(0, rows),
             Print("banner?"),
-            cursor::RestorePosition)?;
+            cursor::RestorePosition
+        )?;
     }
     Ok(())
 }
@@ -75,9 +81,7 @@ fn exit() -> Result<()> {
     /* Print a newline as we don't know where the serial output ended */
     if is_tty {
         let (_cols, rows) = size()?;
-        execute!(stdout,
-            cursor::MoveTo(0, rows),
-            Print(""))?;
+        execute!(stdout, cursor::MoveTo(0, rows), Print(""))?;
     } else {
         println!("");
     }
@@ -125,7 +129,7 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
             //if key_event.modifiers & KeyModifiers::CONTROL == KeyModifiers::CONTROL {
             //}
             Some(Vec::from([ch as u8]))
-        },
+        }
         KeyCode::Null => Some(Vec::from([b'\0'])),
         KeyCode::Esc => Some(Vec::from([esc])),
         KeyCode::CapsLock => None,
