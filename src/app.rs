@@ -1,4 +1,5 @@
 use crate::tui::Tui;
+use crate::Cli;
 use clap::{crate_name, crate_version};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::Result;
@@ -6,6 +7,9 @@ use crossterm::Result;
 pub struct App {
     is_active: bool,
     tui: Tui,
+    cli: Cli,
+    status_delay: u64,
+    add_carraige_return: bool,
 }
 
 pub enum AppState {
@@ -13,17 +17,34 @@ pub enum AppState {
     None,
 }
 
+pub const TICKS_MS: u64 = 100;
+const STATUS_DELAY_MS: u64 = 3000;
+const STATUS_DELAY_TICKS: u64 = STATUS_DELAY_MS / TICKS_MS;
+
 impl App {
-    pub fn init() -> Result<App> {
+    pub fn init(cli: Cli) -> Result<App> {
         let tui = Tui::init()?;
 
         let mut app = App {
             is_active: false,
             tui,
+            cli,
+            status_delay: 0,
+            add_carraige_return: false,
         };
         app.print_startup_stuff()?;
 
         Ok(app)
+    }
+
+    pub fn tick(&mut self) -> Result<()> {
+        if self.status_delay != 0 {
+            self.status_delay -= 1;
+            if self.status_delay == 0 {
+                self.tui.hide_status()?;
+            }
+        }
+        Ok(())
     }
 
     fn print_startup_stuff(&mut self) -> Result<()> {
@@ -41,28 +62,35 @@ impl App {
             + crate_name!()
             + " "
             + crate_version!()
-            + "\r\n\nPort /dev/pts/0, 16:14:24\r\n"
+            + "\r\n\nPort "
+            + &self.cli.device
+            + ", 16:14:24\r\n"
             + help;
 
         //TODO print correct time
-        //TODO print correct port
 
         self.tui.print(&banner)?;
         Ok(())
     }
 
     pub fn print_incoming(&mut self, buf: Vec<u8>) -> Result<()> {
+        if buf[0] == b'\n' && self.add_carraige_return {
+            self.tui.print("\r")?;
+        }
+
         let str = String::from_utf8_lossy(&buf);
         self.tui.print(&str)?;
         Ok(())
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<AppState> {
+        let mut result = AppState::None;
+
         if !self.is_active {
             /* Check for CTRL-A */
             if is_ctrl_a(key_event) {
                 self.is_active = true;
-                self.tui.set_status("banner time!")?;
+                self.tui.set_status_msg("banner time!")?;
             } else {
                 if let Some(data) = key_event_to_bytes(key_event)? {
                     self.print_incoming(data)?;
@@ -76,8 +104,9 @@ impl App {
                 }
             } else if let KeyCode::Char(c) = key_event.code {
                 match c {
-                    'q' => return Ok(AppState::Quit),
-                    'x' => return Ok(AppState::Quit),
+                    'q' => result = AppState::Quit,
+                    'x' => result = AppState::Quit,
+                    'u' => self.toggle_carraige_return()?,
                     'c' => self.tui.clear_screen()?,
                     _ => (),
                 }
@@ -86,14 +115,36 @@ impl App {
                 /* Ignore other events? */
             }
 
+            /* CTRL-A menu no longer active */
             self.is_active = false;
-            self.tui.hide_status()?;
+
+            /* Hide status when needed */
+            if self.status_delay != STATUS_DELAY_TICKS {
+                self.tui.hide_status()?;
+            }
         }
-        Ok(AppState::None)
+        Ok(result)
     }
 
     pub fn cleanup(&mut self) -> Result<()> {
         self.tui.cleanup()?;
+        Ok(())
+    }
+
+    //TODO
+    //mm something like this?
+    // fn toggle_item(&mut self, item: &mut bool, msg: &str) -> Result<()> {
+    //     *item = !*item;
+    //     self.tui.set_status(msg, self.add_carraige_return)?;
+    //     self.status_delay = STATUS_DELAY_TICKS;
+    //     Ok(())
+    // }
+
+    fn toggle_carraige_return(&mut self) -> Result<()> {
+        self.add_carraige_return = !self.add_carraige_return;
+        let prefix = "Carraige return";
+        self.tui.set_status(prefix, self.add_carraige_return)?;
+        self.status_delay = STATUS_DELAY_TICKS;
         Ok(())
     }
 }

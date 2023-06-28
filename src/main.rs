@@ -1,36 +1,72 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use crossterm::{
     event::{Event, EventStream},
     Result,
 };
-use futures::{future::FutureExt, select, StreamExt};
+use futures::StreamExt;
 use std::path::PathBuf;
+use tokio::{
+    time::{Duration, interval},
+    select,
+};
 
 mod app;
 mod tui;
-use app::{App, AppState};
+use app::{App, AppState, TICKS_MS};
+
+// TODO remove enum, use value_parser
+// as a lot more baudrate could work (minicom says so?)
+#[derive(Clone, ValueEnum)]
+enum Baudrate {
+    _19200,
+    _38400,
+    _115200,
+}
+impl Baudrate {
+    fn get_value(&self) -> u32 {
+        match self {
+            Baudrate::_19200 => 19200,
+            Baudrate::_38400 => 38400,
+            Baudrate::_115200 => 115200,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
-struct Cli {
-    name: Option<String>,
+pub struct Cli {
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
+    #[arg(short = 'd', long, default_value = "/dev/ttyS0")]
+    device: String,
+
+    #[arg(short, long, default_value = "115200")]
+    baudrate: Baudrate,
+
     #[arg(short, long, action = clap::ArgAction::Count)]
-    debug: u8,
+    verbose: u8,
 }
 
 async fn event_handler(app: &mut App) -> Result<()> {
     let mut reader = EventStream::new();
+    let mut interval = interval(Duration::from_millis(TICKS_MS));
 
     loop {
-        //let mut delay = Delay::new(Duration::from_millis(1_000)).fuse();
-        let mut input_event = reader.next().fuse();
-
         select! {
-            //_ = delay => { println!(".\r"); },
-            maybe_event = input_event => {
+            /* Tick */
+            _ = interval.tick() => {
+                match app.tick() {
+                    Ok(_) => (),
+                    Err(e) => {
+                        println!("Error: {:?}", e);
+                        return Err(e);
+                    }
+                }
+            }
+
+            /* Crossterm events */
+            maybe_event = reader.next() => {
                 match maybe_event {
                     Some(Ok(event)) => {
                         if let Event::Key(key_event) = event {
@@ -61,7 +97,7 @@ async fn main_app() -> Result<()> {
     }
 
     //TODO handle errors
-    let mut app = App::init()?;
+    let mut app = App::init(cli)?;
     let result = event_handler(&mut app).await;
     app.cleanup()?;
 
