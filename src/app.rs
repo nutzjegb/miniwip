@@ -3,18 +3,85 @@ use crate::Cli;
 use clap::{crate_name, crate_version};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::Result;
+use std::io::Write;
+use tokio_serial::SerialStream;
 
 pub struct App {
     is_active: bool,
     tui: Tui,
     cli: Cli,
     status_delay: u64,
-    add_carraige_return: bool,
+    add_carraige_return: AppOption<bool>,
+    local_echo: AppOption<bool>,
+    timestamp: AppOption<Timestamp>,
 }
 
 pub enum AppState {
     Quit,
     None,
+}
+
+enum AppOptions {
+    LocalEcho,
+    AddCarraigeReturn,
+    Timestamp,
+}
+
+enum Timestamp {
+    Simple,
+    Extend,
+    Off,
+}
+
+struct AppOption<T> {
+    option: T,
+    status_prefix: &'static str,
+}
+impl<T> AppOption<T>
+where
+    T: Copy,
+{
+    fn val(&self) -> T {
+        self.option
+    }
+}
+trait ToggleOption {
+    fn toggle(&mut self);
+    fn val_to_str(&self) -> &str;
+    fn get_status_msg(&self) -> (&str, &str);
+}
+impl ToggleOption for AppOption<bool> {
+    fn toggle(&mut self) {
+        self.option = !self.option;
+    }
+    fn val_to_str(&self) -> &str {
+        match self.option {
+            true => "On",
+            false => "Off",
+        }
+    }
+    fn get_status_msg(&self) -> (&str, &str) {
+        (self.status_prefix, self.val_to_str())
+    }
+}
+impl ToggleOption for AppOption<Timestamp> {
+    fn toggle(&mut self) {
+        self.option = match self.option {
+            Timestamp::Off => Timestamp::Simple,
+            Timestamp::Simple => Timestamp::Extend,
+            Timestamp::Extend => Timestamp::Off,
+        }
+    }
+    fn val_to_str(&self) -> &str {
+        match self.option {
+            Timestamp::Off => "Off",
+            Timestamp::Simple => "Simple",
+            Timestamp::Extend => "Extended",
+        }
+    }
+    fn get_status_msg(&self) -> (&str, &str) {
+        (self.status_prefix, self.val_to_str())
+    }
 }
 
 pub const TICKS_MS: u64 = 100;
@@ -30,7 +97,18 @@ impl App {
             tui,
             cli,
             status_delay: 0,
-            add_carraige_return: false,
+            add_carraige_return: AppOption {
+                option: false,
+                status_prefix: "Add carraige return is ",
+            },
+            local_echo: AppOption {
+                option: false,
+                status_prefix: "Local echo is ",
+            },
+            timestamp: AppOption {
+                option: Timestamp::Off,
+                status_prefix: "Timestamp ",
+            },
         };
         app.print_startup_stuff()?;
 
@@ -74,26 +152,46 @@ impl App {
     }
 
     pub fn print_incoming(&mut self, buf: Vec<u8>) -> Result<()> {
-        if buf[0] == b'\n' && self.add_carraige_return {
-            self.tui.print("\r")?;
+        //wtf? waarom doet minicom \r ?
+        if buf.contains(&b'\r') {
+            println!("ah een r!\r");
         }
 
         let str = String::from_utf8_lossy(&buf);
-        self.tui.print(&str)?;
+        if self.add_carraige_return.val() && str.contains("\n") {
+            println!("doe carraige return\r");
+            self.tui.print(&str.replace("\n", "\r\n"))?;
+        } else {
+            self.tui.print(&str)?;
+        }
         Ok(())
     }
 
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<AppState> {
+    pub fn handle_serial_event(&mut self, data: &[u8]) -> Result<()> {
+        // TODO replace with print incoming?
+        self.print_incoming(data.to_vec())?;
+        Ok(())
+    }
+
+    pub fn handle_key_event(
+        &mut self,
+        port: &mut SerialStream,
+        key_event: KeyEvent,
+    ) -> Result<AppState> {
         let mut result = AppState::None;
 
         if !self.is_active {
             /* Check for CTRL-A */
             if is_ctrl_a(key_event) {
                 self.is_active = true;
-                self.tui.set_status_msg("banner time!")?;
+                self.tui.set_status_msg("CTRL-A Z for help")?;
             } else {
                 if let Some(data) = key_event_to_bytes(key_event)? {
-                    self.print_incoming(data)?;
+                    port.write_all(&data)?;
+
+                    if self.local_echo.val() {
+                        self.print_incoming(data)?;
+                    }
                 }
             }
         } else {
@@ -106,8 +204,11 @@ impl App {
                 match c {
                     'q' => result = AppState::Quit,
                     'x' => result = AppState::Quit,
-                    'u' => self.toggle_carraige_return()?,
+                    'e' => self.toggle_option(AppOptions::LocalEcho)?,
+                    'u' => self.toggle_option(AppOptions::AddCarraigeReturn)?,
+                    'n' => self.toggle_option(AppOptions::Timestamp)?,
                     'c' => self.tui.clear_screen()?,
+                    'z' => todo!(),
                     _ => (),
                 }
             } else {
@@ -131,26 +232,38 @@ impl App {
         Ok(())
     }
 
-    //TODO
-    //mm something like this?
-    // fn toggle_item(&mut self, item: &mut bool, msg: &str) -> Result<()> {
-    //     *item = !*item;
-    //     self.tui.set_status(msg, self.add_carraige_return)?;
-    //     self.status_delay = STATUS_DELAY_TICKS;
-    //     Ok(())
-    // }
-
-    fn toggle_carraige_return(&mut self) -> Result<()> {
-        self.add_carraige_return = !self.add_carraige_return;
-        let prefix = "Carraige return";
-        self.tui.set_status(prefix, self.add_carraige_return)?;
+    fn toggle_option(&mut self, option: AppOptions) -> Result<()> {
+        let (prefix, val) = match option {
+            AppOptions::AddCarraigeReturn => {
+                // TODO I guess this could be one function..
+                self.add_carraige_return.toggle();
+                self.add_carraige_return.get_status_msg()
+            }
+            AppOptions::LocalEcho => {
+                self.local_echo.toggle();
+                self.add_carraige_return.get_status_msg()
+            }
+            AppOptions::Timestamp => {
+                self.timestamp.toggle();
+                self.add_carraige_return.get_status_msg()
+            }
+        };
+        self.tui.set_status(prefix, val)?;
         self.status_delay = STATUS_DELAY_TICKS;
+
         Ok(())
     }
 }
 
 fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
     let esc: u8 = b'\x1b';
+
+    // TODO instead of vec?
+    // let mut buf: [u8; 4] = [0; 4];
+    // let test: u32 = 0x1b;
+    // buf = u32::to_ne_bytes(test << 16 | 1);
+    // return size?
+    // or wrapped in some struct
 
     /* Note, rust does not has some C-escape codes like \b or \e */
     let key_str: Option<Vec<u8>> = match key_event.code {
@@ -170,10 +283,12 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
         KeyCode::Insert => todo!(),
         KeyCode::F(_) => todo!(),
         KeyCode::Char(ch) => {
-            //TODO
-            //if key_event.modifiers & KeyModifiers::CONTROL == KeyModifiers::CONTROL {
-            //}
-            Some(Vec::from([ch as u8]))
+            //TODO check
+            if is_ctrl_key(key_event) && ch >= 'a' && ch <= 'f' {
+                Some(Vec::from([ch as u8 - b'a']))
+            } else {
+                Some(Vec::from([ch as u8]))
+            }
         }
         KeyCode::Null => Some(Vec::from([b'\0'])),
         KeyCode::Esc => Some(Vec::from([esc])),
@@ -188,6 +303,13 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
         KeyCode::Modifier(_) => None,
     };
     Ok(key_str)
+}
+
+fn is_ctrl_key(key_event: KeyEvent) -> bool {
+    if key_event.modifiers & KeyModifiers::CONTROL == KeyModifiers::CONTROL {
+        return true;
+    }
+    false
 }
 
 fn is_ctrl_a(key_event: KeyEvent) -> bool {

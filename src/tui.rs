@@ -36,25 +36,37 @@ impl Tui {
         self.is_tty
     }
 
+    fn handle_last_line(&mut self) -> Result<()> {
+        let (_cols, rows) = terminal::size()?;
+        let (col, row) = cursor::position()?;
+
+        if row == rows - 1 {
+            queue!(
+                self.stdout,
+                terminal::Clear(terminal::ClearType::UntilNewLine),
+                terminal::ScrollUp(1),
+                cursor::MoveTo(0, rows - 1),
+                Print(&self.status_msg),
+                cursor::MoveTo(col, row - 1),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn queue(&mut self, char: u8) -> Result<()> {
+        queue!(self.stdout, Print(char))?;
+        if self.is_tty && char == b'\n' {
+            self.handle_last_line()?;
+        }
+
+        Ok(())
+    }
+
     pub fn print(&mut self, str: &str) -> Result<()> {
         if self.is_tty && str.contains('\n') {
             queue!(self.stdout, Print(str))?;
-
-            let (_cols, rows) = terminal::size()?;
-            let (col, row) = cursor::position()?;
-
-            if row == rows - 1 {
-                execute!(
-                    self.stdout,
-                    terminal::Clear(terminal::ClearType::UntilNewLine),
-                    terminal::ScrollUp(1),
-                    cursor::MoveTo(0, rows - 1),
-                    Print(&self.status_msg),
-                    cursor::MoveTo(col, row - 1),
-                )?;
-            } else {
-                self.stdout.flush()?;
-            }
+            self.handle_last_line()?;
+            self.stdout.flush()?;
         } else {
             execute!(self.stdout, Print(str))?;
         }
@@ -78,11 +90,10 @@ impl Tui {
         Ok(())
     }
 
-    pub fn set_status(&mut self, prefix: &str, onoff: bool) -> Result<()> {
+    pub fn set_status(&mut self, prefix: &str, val: &str) -> Result<()> {
         if self.is_tty {
-            let status = if onoff { " is ON" } else { " is OFF" };
-            let msg = prefix.to_owned() + status;
-
+            // TODO fix set_status_msg api
+            let msg = prefix.to_owned() + val;
             self.set_status_msg(&msg)?;
         }
         Ok(())
