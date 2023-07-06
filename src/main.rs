@@ -1,8 +1,6 @@
+use anyhow::Result;
 use clap::Parser;
-use crossterm::{
-    event::{Event, EventStream},
-    Result,
-};
+use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use std::path::PathBuf;
 use tokio::{
@@ -45,7 +43,7 @@ pub struct Cli {
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
 
-    #[arg(short = 'd', long, default_value = DEFAULT_TTY)]
+    #[arg(short = 'D', long, default_value = DEFAULT_TTY)]
     device: String,
 
     #[arg(short, long, default_value = "115200")]
@@ -77,19 +75,12 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
             maybe_event = port.read(&mut buf) => {
                 match maybe_event {
                     Ok(read_bytes) => {
-                        //if 1 != read_bytes {
-                            println!("- got {} bytes -\r", read_bytes);
-                        //}
                         let slice = &buf[0..read_bytes];
-                        for i in 0..read_bytes {
-                            print!("{:02x}", buf[i]);
-                        }
-                        println!(" (buf {:?} slice {:?} len {})\r", buf.as_ptr(), slice.as_ptr(), slice.len());
-                        //app.handle_serial_event(slice)?;
+                        app.handle_serial_event(slice)?;
                     },
                     Err(e) => {
                         println!("Error: {:?}", e);
-                        return Err(e);
+                        return Err(e.into());
                     },
                 }
             }
@@ -107,7 +98,7 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
                     },
                     Some(Err(e)) => {
                         println!("Error: {:?}", e);
-                        return Err(e);
+                        return Err(e.into());
                     }
                     // TODO break on None?
                     None => todo!(), //break,
@@ -121,17 +112,24 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
 async fn main_app() -> Result<()> {
     let cli = Cli::parse();
 
+    // TODO actually use config file
     if let Some(config_path) = cli.config.as_deref() {
         println!("Value for config: {}", config_path.display());
     }
 
+    /* Set default options */
+    let builder = tokio_serial::new(cli.device.clone(), cli.baudrate)
+        .data_bits(tokio_serial::DataBits::Eight)
+        .parity(tokio_serial::Parity::None)
+        .stop_bits(tokio_serial::StopBits::One)
+        .flow_control(tokio_serial::FlowControl::None);
     /* Open serial port */
-    let mut port = tokio_serial::new(cli.device.clone(), cli.baudrate).open_native_async()?;
+    let mut port = builder.open_native_async()?;
+
     #[cfg(unix)]
     port.set_exclusive(false)
         .expect("Unable to set serial port exclusive to false");
 
-    //TODO handle errors
     let mut app = App::init(cli)?;
     let result = event_handler(&mut app, &mut port).await;
     app.cleanup()?;

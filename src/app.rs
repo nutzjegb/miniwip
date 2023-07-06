@@ -1,17 +1,22 @@
 use crate::tui::Tui;
 use crate::Cli;
+use anyhow::Result;
 use clap::{crate_name, crate_version};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use crossterm::Result;
 use std::io::Write;
 use tokio_serial::SerialStream;
 
+// TODO add support for logging to a file?
+// TODO add support to paste a file?
+// TODO Allow setting the serialport options? (or cmdline only)
+
 pub struct App {
-    is_active: bool,
+    catch_key: bool,
     tui: Tui,
     cli: Cli,
     status_delay: u64,
-    add_carraige_return: AppOption<bool>,
+    add_carriage_return: AppOption<bool>,
+    add_line_feed: AppOption<bool>,
     local_echo: AppOption<bool>,
     timestamp: AppOption<Timestamp>,
 }
@@ -23,11 +28,13 @@ pub enum AppState {
 
 enum AppOptions {
     LocalEcho,
-    AddCarraigeReturn,
+    AddCarriageReturn,
+    AddLineFeed,
     Timestamp,
 }
 
-enum Timestamp {
+#[derive(Clone, Copy, PartialEq)]
+pub enum Timestamp {
     Simple,
     Extend,
     Off,
@@ -48,7 +55,7 @@ where
 trait ToggleOption {
     fn toggle(&mut self);
     fn val_to_str(&self) -> &str;
-    fn get_status_msg(&self) -> (&str, &str);
+    fn toggle_and_get_status_msg(&mut self) -> (&str, &str);
 }
 impl ToggleOption for AppOption<bool> {
     fn toggle(&mut self) {
@@ -60,7 +67,8 @@ impl ToggleOption for AppOption<bool> {
             false => "Off",
         }
     }
-    fn get_status_msg(&self) -> (&str, &str) {
+    fn toggle_and_get_status_msg(&mut self) -> (&str, &str) {
+        self.toggle();
         (self.status_prefix, self.val_to_str())
     }
 }
@@ -79,7 +87,8 @@ impl ToggleOption for AppOption<Timestamp> {
             Timestamp::Extend => "Extended",
         }
     }
-    fn get_status_msg(&self) -> (&str, &str) {
+    fn toggle_and_get_status_msg(&mut self) -> (&str, &str) {
+        self.toggle();
         (self.status_prefix, self.val_to_str())
     }
 }
@@ -93,13 +102,17 @@ impl App {
         let tui = Tui::init()?;
 
         let mut app = App {
-            is_active: false,
+            catch_key: false,
             tui,
             cli,
             status_delay: 0,
-            add_carraige_return: AppOption {
+            add_carriage_return: AppOption {
                 option: false,
-                status_prefix: "Add carraige return is ",
+                status_prefix: "Add carriage return is ",
+            },
+            add_line_feed: AppOption {
+                option: false,
+                status_prefix: "Add line feed is ",
             },
             local_echo: AppOption {
                 option: false,
@@ -142,25 +155,23 @@ impl App {
             + crate_version!()
             + "\r\n\nPort "
             + &self.cli.device
-            + ", 16:14:24\r\n"
+            + "\r\n"
             + help;
-
-        //TODO print correct time
 
         self.tui.print(&banner)?;
         Ok(())
     }
 
-    pub fn print_incoming(&mut self, buf: Vec<u8>) -> Result<()> {
-        //wtf? waarom doet minicom \r ?
-        if buf.contains(&b'\r') {
-            println!("ah een r!\r");
-        }
+    fn print_incoming(&mut self, buf: Vec<u8>) -> Result<()> {
+        // TODO refactor vec to u8
 
         let str = String::from_utf8_lossy(&buf);
-        if self.add_carraige_return.val() && str.contains("\n") {
-            println!("doe carraige return\r");
-            self.tui.print(&str.replace("\n", "\r\n"))?;
+
+        // TODO instead of replace, use split?
+        if self.add_carriage_return.val() && str.contains('\n') {
+            self.tui.print(&str.replace('\n', "\r\n"))?;
+        } else if self.add_line_feed.val() && str.contains('\r') {
+            self.tui.print(&str.replace('r', "\r\n"))?;
         } else {
             self.tui.print(&str)?;
         }
@@ -168,8 +179,15 @@ impl App {
     }
 
     pub fn handle_serial_event(&mut self, data: &[u8]) -> Result<()> {
-        // TODO replace with print incoming?
         self.print_incoming(data.to_vec())?;
+        Ok(())
+    }
+
+    fn send_serial_data(&mut self, port: &mut SerialStream, data: Vec<u8>) -> Result<()> {
+        port.write_all(&data)?;
+        if self.local_echo.val() {
+            self.print_incoming(data)?;
+        }
         Ok(())
     }
 
@@ -180,33 +198,31 @@ impl App {
     ) -> Result<AppState> {
         let mut result = AppState::None;
 
-        if !self.is_active {
+        if !self.catch_key {
             /* Check for CTRL-A */
             if is_ctrl_a(key_event) {
-                self.is_active = true;
+                self.catch_key = true;
                 self.tui.set_status_msg("CTRL-A Z for help")?;
-            } else {
-                if let Some(data) = key_event_to_bytes(key_event)? {
-                    port.write_all(&data)?;
-
-                    if self.local_echo.val() {
-                        self.print_incoming(data)?;
-                    }
-                }
+            } else if let Some(data) = key_event_to_bytes(key_event)? {
+                self.send_serial_data(port, data)?;
             }
         } else {
             if is_ctrl_a(key_event) {
-                /* Send the CTRL-A */
+                /* Got CTRL-A for the second time, send it */
                 if let Some(data) = key_event_to_bytes(key_event)? {
-                    self.print_incoming(data)?;
+                    self.send_serial_data(port, data)?;
                 }
             } else if let KeyCode::Char(c) = key_event.code {
                 match c {
                     'q' => result = AppState::Quit,
                     'x' => result = AppState::Quit,
                     'e' => self.toggle_option(AppOptions::LocalEcho)?,
-                    'u' => self.toggle_option(AppOptions::AddCarraigeReturn)?,
-                    'n' => self.toggle_option(AppOptions::Timestamp)?,
+                    'a' => self.toggle_option(AppOptions::AddLineFeed)?,
+                    'u' => self.toggle_option(AppOptions::AddCarriageReturn)?,
+                    'n' => {
+                        self.toggle_option(AppOptions::Timestamp)?;
+                        self.tui.set_prefix_timestamp(self.timestamp.val());
+                    }
                     'c' => self.tui.clear_screen()?,
                     'z' => todo!(),
                     _ => (),
@@ -214,10 +230,11 @@ impl App {
             } else {
                 // TODO
                 /* Ignore other events? */
+                todo!();
             }
 
             /* CTRL-A menu no longer active */
-            self.is_active = false;
+            self.catch_key = false;
 
             /* Hide status when needed */
             if self.status_delay != STATUS_DELAY_TICKS {
@@ -234,19 +251,10 @@ impl App {
 
     fn toggle_option(&mut self, option: AppOptions) -> Result<()> {
         let (prefix, val) = match option {
-            AppOptions::AddCarraigeReturn => {
-                // TODO I guess this could be one function..
-                self.add_carraige_return.toggle();
-                self.add_carraige_return.get_status_msg()
-            }
-            AppOptions::LocalEcho => {
-                self.local_echo.toggle();
-                self.add_carraige_return.get_status_msg()
-            }
-            AppOptions::Timestamp => {
-                self.timestamp.toggle();
-                self.add_carraige_return.get_status_msg()
-            }
+            AppOptions::AddCarriageReturn => self.add_carriage_return.toggle_and_get_status_msg(),
+            AppOptions::AddLineFeed => self.add_line_feed.toggle_and_get_status_msg(),
+            AppOptions::LocalEcho => self.local_echo.toggle_and_get_status_msg(),
+            AppOptions::Timestamp => self.timestamp.toggle_and_get_status_msg(),
         };
         self.tui.set_status(prefix, val)?;
         self.status_delay = STATUS_DELAY_TICKS;
@@ -265,27 +273,33 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
     // return size?
     // or wrapped in some struct
 
-    /* Note, rust does not has some C-escape codes like \b or \e */
+    // TODO verify against u-boot or something similar
     let key_str: Option<Vec<u8>> = match key_event.code {
         KeyCode::Backspace => Some(Vec::from([b'\x08'])),
-        KeyCode::Enter => Some(Vec::from([b'\r', b'\n'])),
-        KeyCode::Left => todo!(),
-        KeyCode::Right => todo!(),
-        KeyCode::Up => todo!(),
-        KeyCode::Down => todo!(),
-        KeyCode::Home => todo!(),
-        KeyCode::End => todo!(),
-        KeyCode::PageUp => todo!(),
-        KeyCode::PageDown => todo!(),
+        //TODO Make this an option?
+        KeyCode::Enter => Some(Vec::from([b'\n'])),
+        KeyCode::Left => Some(Vec::from([esc, b'\x5b', b'\x44'])),
+        KeyCode::Right => Some(Vec::from([esc, b'\x5b', b'\x43'])),
+        KeyCode::Up => Some(Vec::from([esc, b'\x5b', b'\x41'])),
+        KeyCode::Down => Some(Vec::from([esc, b'\x5b', b'\x42'])),
+        KeyCode::Home => Some(Vec::from([esc, b'\x5b', b'\x48'])),
+        KeyCode::End => Some(Vec::from([esc, b'\x5b', b'\x46'])),
+        KeyCode::PageUp => Some(Vec::from([esc, b'\x5b', b'\x35', b'\x7e'])),
+        KeyCode::PageDown => Some(Vec::from([esc, b'\x5b', b'\x36', b'\x7e'])),
         KeyCode::Tab => Some(Vec::from([b'\t'])),
-        KeyCode::BackTab => todo!(),
-        KeyCode::Delete => todo!(),
-        KeyCode::Insert => todo!(),
-        KeyCode::F(_) => todo!(),
+        KeyCode::BackTab => Some(Vec::from([esc, b'\x5b', b'\x5a'])),
+        KeyCode::Delete => Some(Vec::from([esc, b'\x5b', b'\x33', b'\x7e'])),
+        KeyCode::Insert => Some(Vec::from([esc, b'\x5b', b'\x32', b'\x7e'])),
+        KeyCode::F(num) => {
+            if num <= 4 {
+                Some(Vec::from([esc, b'\x5b', b'\x4f', b'\x49' + num]))
+            } else {
+                None
+            }
+        }
         KeyCode::Char(ch) => {
-            //TODO check
-            if is_ctrl_key(key_event) && ch >= 'a' && ch <= 'f' {
-                Some(Vec::from([ch as u8 - b'a']))
+            if is_ctrl_key(key_event) && ch >= 'a' && ch <= 'z' {
+                Some(Vec::from([ch as u8 - b'a' - 1]))
             } else {
                 Some(Vec::from([ch as u8]))
             }
@@ -298,7 +312,7 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
         KeyCode::PrintScreen => None,
         KeyCode::Pause => None,
         KeyCode::Menu => None,
-        KeyCode::KeypadBegin => todo!(),
+        KeyCode::KeypadBegin => None,
         KeyCode::Media(_) => None,
         KeyCode::Modifier(_) => None,
     };
