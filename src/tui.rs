@@ -12,9 +12,7 @@ pub struct Tui {
     on_newline: bool,
     prefix_timestamp: Timestamp,
 
-    num_rows: u16,
     cur_row: u16,
-    cur_col: u16,
 }
 
 const FORMAT_SIMPLE: &[time::format_description::FormatItem<'static>] =
@@ -46,9 +44,7 @@ impl Tui {
             status_msg: "".to_string(),
             on_newline: false,
             prefix_timestamp: Timestamp::Off,
-            num_rows: 0,
             cur_row: 0,
-            cur_col: 0,
         })
     }
 
@@ -69,29 +65,26 @@ impl Tui {
     }
 
     fn handle_last_line(&mut self) -> Result<()> {
-        let (cols, rows) = terminal::size()?;
+        let (_cols, rows) = terminal::size()?;
 
-        if self.num_rows == 0 {
-            self.num_rows = rows;
-        }
-        if rows != self.num_rows {
-            // TODO handle resize
-            todo!();
-        }
-        // Handle line wrap
-        self.cur_col %= cols;
+        // TODO handle resize
+        // for now just accept things look weird when resizing
 
-        // TODO fix this function, does not appear to work correctly
+        // TODO this is bound to break
+        // Fix cursor::position() somehow?
+        // (it blocks and fails sometimes..)
         if self.cur_row >= rows - 1 {
             queue!(
                 self.stdout,
                 terminal::Clear(terminal::ClearType::UntilNewLine),
+                cursor::SavePosition,
                 terminal::ScrollUp(1),
                 cursor::MoveTo(0, rows - 1),
                 Print(&self.status_msg),
-                cursor::MoveTo(self.cur_col, rows - 2),
+                cursor::RestorePosition,
+                cursor::MoveUp(1),
             )?;
-            self.cur_row = rows - 2;
+            self.cur_row = rows - 1;
         }
         Ok(())
     }
@@ -116,15 +109,12 @@ impl Tui {
             if line.ends_with('\n') {
                 self.on_newline = true;
                 self.cur_row += 1;
-                self.cur_col = 0;
             } else {
                 self.on_newline = false;
-                self.cur_col = line.len() as u16;
             }
+            // Handle the last line so we don't overwrite the status line
+            self.handle_last_line()?;
         }
-
-        // Handle the last line so we don't overwrite the status line
-        self.handle_last_line()?;
         self.stdout.flush()?;
 
         Ok(())
@@ -178,7 +168,6 @@ impl Tui {
             terminal::Clear(terminal::ClearType::All),
             cursor::MoveTo(0, 0)
         )?;
-        self.cur_col = 0;
         self.cur_row = 0;
         Ok(())
     }

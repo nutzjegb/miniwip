@@ -144,16 +144,16 @@ impl App {
         }
 
         let help = if self.tui.is_tty() {
-            "Press CTRL-A Z for help on special keys\r\n\n"
+            "Press CTRL-A Z for help on special keys\r\n\r\n"
         } else {
-            "TTY not detected, fancy menus are disabled (hint use CTRL-A Q to quit)\r\n\n"
+            "TTY not detected, fancy menus are disabled (hint use CTRL-A Q to quit)\r\n\r\n"
         };
 
         let banner = "Welcome to ".to_owned()
             + crate_name!()
             + " "
             + crate_version!()
-            + "\r\n\nPort "
+            + "\r\n\r\nPort "
             + &self.cli.device
             + "\r\n"
             + help;
@@ -228,9 +228,7 @@ impl App {
                     _ => (),
                 }
             } else {
-                // TODO
-                /* Ignore other events? */
-                todo!();
+                /* Ignore other keys like 'enter' */
             }
 
             /* CTRL-A menu no longer active */
@@ -299,7 +297,7 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
         }
         KeyCode::Char(ch) => {
             if is_ctrl_key(key_event) && ch >= 'a' && ch <= 'z' {
-                Some(Vec::from([ch as u8 - b'a' - 1]))
+                Some(Vec::from([ch as u8 - b'a']))
             } else {
                 Some(Vec::from([ch as u8]))
             }

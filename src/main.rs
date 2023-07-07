@@ -95,6 +95,7 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
                                 AppState::None => (),
                             }
                         }
+                        // TODO handle other events (like resize)
                     },
                     Some(Err(e)) => {
                         println!("Error: {:?}", e);
