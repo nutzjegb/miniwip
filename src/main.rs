@@ -10,6 +10,11 @@ use tokio::{
 };
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
+#[cfg(windows)]
+use tokio::signal::windows::ctrl_close;
+
 mod app;
 mod tui;
 use app::{App, AppState, TICKS_MS};
@@ -58,6 +63,12 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
     let mut reader = EventStream::new();
     let mut interval = interval(Duration::from_millis(TICKS_MS));
 
+    /* No idea of this works on windows... */
+    #[cfg(unix)]
+    let mut sig_term = signal(SignalKind::terminate())?;
+    #[cfg(windows)]
+    let mut sig_term = ctrl_close()?;
+
     loop {
         select! {
             /* Tick */
@@ -105,6 +116,12 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
                     None => todo!(), //break,
                 }
             }
+
+            /* Exit when needed */
+            _ = sig_term.recv() => {
+                // TODO parse the result?
+                break;
+            }
         };
     }
     Ok(())
@@ -137,6 +154,17 @@ async fn main_app() -> Result<()> {
 
     result
 }
+
+// TODO?
+// fn init_panic_hook() {
+//     let original_hook = take_hook();
+//     set_hook(Box::new(move |panic_info| {
+//         // intentionally ignore errors here since we're already in a panic
+//         let _ = execute!(stdout(), LeaveAlternateScreen);
+//         let _ = disable_raw_mode();
+//         original_hook(panic_info);
+//     }));
+// }
 
 #[tokio::main]
 async fn main() -> Result<()> {

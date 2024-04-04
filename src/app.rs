@@ -296,7 +296,7 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
             }
         }
         KeyCode::Char(ch) => {
-            if is_ctrl_key(key_event) && ch >= 'a' && ch <= 'z' {
+            if is_ctrl_key(key_event) && ch.is_ascii_lowercase() {
                 Some(Vec::from([ch as u8 - b'a']))
             } else {
                 Some(Vec::from([ch as u8]))
