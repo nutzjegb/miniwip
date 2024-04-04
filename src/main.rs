@@ -17,7 +17,7 @@ use tokio::signal::windows::ctrl_close;
 
 mod app;
 mod tui;
-use app::{App, AppState, TICKS_MS};
+use app::{App, AppResult, TICKS_MS};
 
 // TODO remove enum, use value_parser
 // as a lot more baudrate could work (minicom says so?)
@@ -102,11 +102,11 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
                     Some(Ok(event)) => {
                         if let Event::Key(key_event) = event {
                             match app.handle_key_event(port, key_event)? {
-                                AppState::Quit => break,
-                                AppState::None => (),
+                                AppResult::Quit => break,
+                                AppResult::None => (),
                             }
                         }
-                        // TODO handle other events (like resize)
+                        // TODO handle other events (like resize)?
                     },
                     Some(Err(e)) => {
                         println!("Error: {:?}", e);

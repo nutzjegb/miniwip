@@ -11,7 +11,7 @@ use tokio_serial::SerialStream;
 // TODO Allow setting the serialport options? (or cmdline only)
 
 pub struct App {
-    catch_key: bool,
+    state: AppState,
     tui: Tui,
     cli: Cli,
     status_delay: u64,
@@ -22,6 +22,12 @@ pub struct App {
 }
 
 pub enum AppState {
+    Receiving,
+    MenuActive,
+    CatchKey,
+}
+
+pub enum AppResult {
     Quit,
     None,
 }
@@ -102,7 +108,7 @@ impl App {
         let tui = Tui::init()?;
 
         let mut app = App {
-            catch_key: false,
+            state: AppState::Receiving,
             tui,
             cli,
             status_delay: 0,
@@ -158,7 +164,21 @@ impl App {
             + "\r\n"
             + help;
 
-        self.tui.print(&banner)?;
+        self.tui.print_to_screen(&banner)?;
+        Ok(())
+    }
+
+    fn show_help(&mut self) -> Result<()> {
+        if !self.tui.is_tty() {
+            return Ok(());
+        }
+
+        let msg = "help help help\n\r";
+
+        self.tui.enter_alt()?;
+        self.state = AppState::MenuActive;
+        self.tui.print_to_screen(msg)?;
+
         Ok(())
     }
 
@@ -169,11 +189,11 @@ impl App {
 
         // TODO instead of replace, use split?
         if self.add_carriage_return.val() && str.contains('\n') {
-            self.tui.print(&str.replace('\n', "\r\n"))?;
+            self.tui.print_or_queue(&str.replace('\n', "\r\n"))?;
         } else if self.add_line_feed.val() && str.contains('\r') {
-            self.tui.print(&str.replace('r', "\r\n"))?;
+            self.tui.print_or_queue(&str.replace('r', "\r\n"))?;
         } else {
-            self.tui.print(&str)?;
+            self.tui.print_or_queue(&str)?;
         }
         Ok(())
     }
@@ -195,49 +215,59 @@ impl App {
         &mut self,
         port: &mut SerialStream,
         key_event: KeyEvent,
-    ) -> Result<AppState> {
-        let mut result = AppState::None;
+    ) -> Result<AppResult> {
+        let mut result = AppResult::None;
 
-        if !self.catch_key {
-            /* Check for CTRL-A */
-            if is_ctrl_a(key_event) {
-                self.catch_key = true;
-                self.tui.set_status_msg("CTRL-A Z for help")?;
-            } else if let Some(data) = key_event_to_bytes(key_event)? {
-                self.send_serial_data(port, data)?;
-            }
-        } else {
-            if is_ctrl_a(key_event) {
-                /* Got CTRL-A for the second time, send it */
-                if let Some(data) = key_event_to_bytes(key_event)? {
+        match self.state {
+            AppState::Receiving => {
+                assert!(!self.tui.on_alternate_screen());
+
+                /* Check for CTRL-A */
+                if is_ctrl_a(key_event) {
+                    self.state = AppState::CatchKey;
+                    self.tui.set_status_msg("CTRL-A Z for help")?;
+                } else if let Some(data) = key_event_to_bytes(key_event)? {
                     self.send_serial_data(port, data)?;
                 }
-            } else if let KeyCode::Char(c) = key_event.code {
-                match c {
-                    'q' => result = AppState::Quit,
-                    'x' => result = AppState::Quit,
-                    'e' => self.toggle_option(AppOptions::LocalEcho)?,
-                    'a' => self.toggle_option(AppOptions::AddLineFeed)?,
-                    'u' => self.toggle_option(AppOptions::AddCarriageReturn)?,
-                    'n' => {
-                        self.toggle_option(AppOptions::Timestamp)?;
-                        self.tui.set_prefix_timestamp(self.timestamp.val());
+            },
+            AppState::CatchKey => {
+                /* Leave the state */
+                self.state = AppState::Receiving;
+
+                if is_ctrl_a(key_event) {
+                    /* Got CTRL-A for the second time, send it */
+                    if let Some(data) = key_event_to_bytes(key_event)? {
+                        self.send_serial_data(port, data)?;
                     }
-                    'c' => self.tui.clear_screen()?,
-                    'z' => todo!(),
-                    _ => (),
+                } else if let KeyCode::Char(c) = key_event.code {
+                    match c {
+                        'q' => result = AppResult::Quit,
+                        'x' => result = AppResult::Quit,
+                        'e' => self.toggle_option(AppOptions::LocalEcho)?,
+                        'a' => self.toggle_option(AppOptions::AddLineFeed)?,
+                        'u' => self.toggle_option(AppOptions::AddCarriageReturn)?,
+                        'n' => {
+                            self.toggle_option(AppOptions::Timestamp)?;
+                            self.tui.set_prefix_timestamp(self.timestamp.val());
+                        }
+                        'c' => self.tui.clear_screen()?,
+                        'z' => self.show_help()?,
+                        _ => (),
+                    }
+                } else {
+                    /* Ignore other keys like 'enter' */
                 }
-            } else {
-                /* Ignore other keys like 'enter' */
-            }
 
-            /* CTRL-A menu no longer active */
-            self.catch_key = false;
-
-            /* Hide status when needed */
-            if self.status_delay != STATUS_DELAY_TICKS {
-                self.tui.hide_status()?;
-            }
+                /* Hide status when needed */
+                if self.status_delay != STATUS_DELAY_TICKS {
+                    self.tui.hide_status()?;
+                }
+            },
+            AppState::MenuActive => {
+                /* For now, leave the menu on any key */
+                self.tui.leave_alt()?;
+                self.state = AppState::Receiving;
+            },
         }
         Ok(result)
     }
