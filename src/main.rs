@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
+use clap::builder::TypedValueParser;
 use clap::Parser;
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
@@ -19,24 +20,6 @@ mod app;
 mod tui;
 use app::{App, AppResult, TICKS_MS};
 
-// TODO remove enum, use value_parser
-// as a lot more baudrate could work (minicom says so?)
-// #[derive(Clone, ValueEnum)]
-// enum Baudrate {
-//     _19200,
-//     _38400,
-//     _115200,
-// }
-// impl Baudrate {
-//     fn get_value(&self) -> u32 {
-//         match self {
-//             Baudrate::_19200 => 19200,
-//             Baudrate::_38400 => 38400,
-//             Baudrate::_115200 => 115200,
-//         }
-//     }
-// }
-
 #[cfg(unix)]
 const DEFAULT_TTY: &str = "/dev/ttyS0";
 #[cfg(windows)]
@@ -51,11 +34,48 @@ pub struct Cli {
     #[arg(short = 'D', long, default_value = DEFAULT_TTY)]
     device: String,
 
-    #[arg(short, long, default_value = "115200")]
-    baudrate: u32,
+    #[arg(short, long, default_value_t = 115200)]
+    baud_rate: u32,
 
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    verbose: u8,
+    #[arg(short = 'B', long, default_value = "eight",
+        value_parser = clap::builder::PossibleValuesParser::new(["five", "six", "seven", "eight"])
+            .map(|s| match s.as_str() {
+            "five" => tokio_serial::DataBits::Five,
+            "six" => tokio_serial::DataBits::Six,
+            "seven" => tokio_serial::DataBits::Seven,
+            "eight" => tokio_serial::DataBits::Eight,
+            _ => unreachable!(),
+        }))]
+    data_bits: tokio_serial::DataBits,
+
+    #[arg(short, long, default_value = "none",
+        value_parser = clap::builder::PossibleValuesParser::new(["none", "odd", "even"])
+            .map(|s| match s.as_str() {
+            "none" => tokio_serial::Parity::None,
+            "odd" => tokio_serial::Parity::Odd,
+            "even" => tokio_serial::Parity::Even,
+            _ => unreachable!(),
+        }))]
+    parity: tokio_serial::Parity,
+
+    #[arg(short, long, default_value = "1",
+        value_parser = clap::builder::PossibleValuesParser::new(["1", "2"])
+            .map(|s| match s.as_str() {
+            "1" => tokio_serial::StopBits::One,
+            "2" => tokio_serial::StopBits::Two,
+            _ => unreachable!(),
+        }))]
+    stop_bits: tokio_serial::StopBits,
+
+    #[arg(short, long, default_value = "none",
+        value_parser = clap::builder::PossibleValuesParser::new(["none", "software", "hardware"])
+            .map(|s| match s.as_str() {
+            "none" => tokio_serial::FlowControl::None,
+            "software" => tokio_serial::FlowControl::Software,
+            "hardware" => tokio_serial::FlowControl::Hardware,
+            _ => unreachable!(),
+        }))]
+    flow_control: tokio_serial::FlowControl,
 }
 
 async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
@@ -136,13 +156,15 @@ async fn main_app() -> Result<()> {
     }
 
     /* Set default options */
-    let builder = tokio_serial::new(cli.device.clone(), cli.baudrate)
-        .data_bits(tokio_serial::DataBits::Eight)
-        .parity(tokio_serial::Parity::None)
-        .stop_bits(tokio_serial::StopBits::One)
-        .flow_control(tokio_serial::FlowControl::None);
+    let builder = tokio_serial::new(cli.device.clone(), cli.baud_rate)
+        .data_bits(cli.data_bits)
+        .parity(cli.parity)
+        .stop_bits(cli.stop_bits)
+        .flow_control(cli.flow_control);
     /* Open serial port */
-    let mut port = builder.open_native_async()?;
+    let mut port = builder
+        .open_native_async()
+        .map_err(|e| Error::msg(format!("Could not open {} ({})", cli.device, e)))?;
 
     #[cfg(unix)]
     port.set_exclusive(false)
