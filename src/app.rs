@@ -10,33 +10,106 @@ use tokio_serial::SerialStream;
 // TODO add support to paste a file?
 // TODO Allow setting the serialport options? (or cmdline only)
 
+#[derive(Clone, Copy, PartialEq)]
+enum Commands {
+    Quit,
+    Exit,
+    ToggleLocalEcho,
+    ToggleLineFeed,
+    ToggleCarriageReturn,
+    ToggleTimestamp,
+    ClearScreen,
+    ShowHelp,
+}
+// impl Commands {
+//     fn key(&self) -> char {
+//         use Commands::*;
+//         match *self {
+//             Quit => 'q',
+//             Exit => 'x',
+//             ToggleLocalEcho => 'e',
+//             ToggleLineFeed => 'a',
+//             ToggleCarriageReturn => 'u',
+//             ToggleTimestamp => 'n',
+//             ClearScreen => 'c',
+//             ShowHelp => 'z',
+//         }
+//     }
+//     fn desc(&self) -> &'static str {
+//         return "test";
+//     }
+// }
+
+trait OptionAsString {
+    fn val_to_str(&self) -> &'static str;
+}
+impl OptionAsString for bool {
+    fn val_to_str(&self) -> &'static str {
+        if *self {
+            "True"
+        } else {
+            "False"
+        }
+    }
+}
+impl OptionAsString for Timestamp {
+    fn val_to_str(&self) -> &'static str {
+        match *self {
+            Timestamp::Simple => "Simple",
+            Timestamp::Extend => "Extended",
+            Timestamp::Off => "Off",
+        }
+    }
+}
+
+fn get_command(cmd: char) -> Option<Commands> {
+    use Commands::*;
+    match cmd {
+        'q' => Some(Quit),
+        'x' => Some(Exit),
+        'e' => Some(ToggleLocalEcho),
+        'a' => Some(ToggleLineFeed),
+        'u' => Some(ToggleCarriageReturn),
+        'n' => Some(ToggleTimestamp),
+        'c' => Some(ClearScreen),
+        'z' => Some(ShowHelp),
+        _ => None,
+    }
+}
+// #[cfg(test)]
+// mod tests {
+//     use crate::app::get_command;
+
+//     #[test]
+//     fn matches() {
+//         for c in 'a'..'z' {
+//             if let Some(cmd) = get_command(c) {
+//                 assert!(cmd.key() == c);
+//             }
+//         }
+//     }
+// }
+
 pub struct App {
-    state: AppState,
+    state: AppStates,
     tui: Tui,
     cli: Cli,
     status_delay: u64,
-    add_carriage_return: AppOption<bool>,
-    add_line_feed: AppOption<bool>,
-    local_echo: AppOption<bool>,
-    timestamp: AppOption<Timestamp>,
+    add_carriage_return: bool,
+    add_line_feed: bool,
+    local_echo: bool,
+    timestamp: Timestamp,
 }
 
-pub enum AppState {
+pub enum AppStates {
     Receiving,
     MenuActive,
     CatchKey,
 }
 
-pub enum AppResult {
+pub enum AppResults {
     Quit,
     None,
-}
-
-enum AppOptions {
-    LocalEcho,
-    AddCarriageReturn,
-    AddLineFeed,
-    Timestamp,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -45,59 +118,68 @@ pub enum Timestamp {
     Extend,
     Off,
 }
-
-struct AppOption<T> {
-    option: T,
-    status_prefix: &'static str,
-}
-impl<T> AppOption<T>
-where
-    T: Copy,
-{
-    fn val(&self) -> T {
-        self.option
-    }
-}
-trait ToggleOption {
-    fn toggle(&mut self);
-    fn val_to_str(&self) -> &str;
-    fn toggle_and_get_status_msg(&mut self) -> (&str, &str);
-}
-impl ToggleOption for AppOption<bool> {
-    fn toggle(&mut self) {
-        self.option = !self.option;
-    }
-    fn val_to_str(&self) -> &str {
-        match self.option {
-            true => "On",
-            false => "Off",
-        }
-    }
-    fn toggle_and_get_status_msg(&mut self) -> (&str, &str) {
-        self.toggle();
-        (self.status_prefix, self.val_to_str())
-    }
-}
-impl ToggleOption for AppOption<Timestamp> {
-    fn toggle(&mut self) {
-        self.option = match self.option {
-            Timestamp::Off => Timestamp::Simple,
+impl Timestamp {
+    fn next(&self) -> Self {
+        match *self {
             Timestamp::Simple => Timestamp::Extend,
-            Timestamp::Extend => Timestamp::Off,
+            Timestamp::Extend => Timestamp::Simple,
+            Timestamp::Off => Timestamp::Simple,
         }
-    }
-    fn val_to_str(&self) -> &str {
-        match self.option {
-            Timestamp::Off => "Off",
-            Timestamp::Simple => "Simple",
-            Timestamp::Extend => "Extended",
-        }
-    }
-    fn toggle_and_get_status_msg(&mut self) -> (&str, &str) {
-        self.toggle();
-        (self.status_prefix, self.val_to_str())
     }
 }
+
+// struct AppOption<T> {
+//     option: T,
+//     status_prefix: &'static str,
+// }
+// impl<T> AppOption<T>
+// where
+//     T: Copy,
+// {
+//     fn val(&self) -> T {
+//         self.option
+//     }
+// }
+// trait ToggleOption {
+//     fn toggle(&mut self);
+//     fn val_to_str(&self) -> &str;
+//     fn toggle_and_get_status_msg(&mut self) -> (&str, &str);
+// }
+// impl ToggleOption for AppOption<bool> {
+//     fn toggle(&mut self) {
+//         self.option = !self.option;
+//     }
+//     fn val_to_str(&self) -> &str {
+//         match self.option {
+//             true => "On",
+//             false => "Off",
+//         }
+//     }
+//     fn toggle_and_get_status_msg(&mut self) -> (&str, &str) {
+//         self.toggle();
+//         (self.status_prefix, self.val_to_str())
+//     }
+// }
+// impl ToggleOption for AppOption<Timestamp> {
+//     fn toggle(&mut self) {
+//         self.option = match self.option {
+//             Timestamp::Off => Timestamp::Simple,
+//             Timestamp::Simple => Timestamp::Extend,
+//             Timestamp::Extend => Timestamp::Off,
+//         }
+//     }
+//     fn val_to_str(&self) -> &str {
+//         match self.option {
+//             Timestamp::Off => "Off",
+//             Timestamp::Simple => "Simple",
+//             Timestamp::Extend => "Extended",
+//         }
+//     }
+//     fn toggle_and_get_status_msg(&mut self) -> (&str, &str) {
+//         self.toggle();
+//         (self.status_prefix, self.val_to_str())
+//     }
+// }
 
 pub const TICKS_MS: u64 = 100;
 const STATUS_DELAY_MS: u64 = 3000;
@@ -108,26 +190,14 @@ impl App {
         let tui = Tui::init()?;
 
         let mut app = App {
-            state: AppState::Receiving,
+            state: AppStates::Receiving,
             tui,
             cli,
             status_delay: 0,
-            add_carriage_return: AppOption {
-                option: false,
-                status_prefix: "Add carriage return is ",
-            },
-            add_line_feed: AppOption {
-                option: false,
-                status_prefix: "Add line feed is ",
-            },
-            local_echo: AppOption {
-                option: false,
-                status_prefix: "Local echo is ",
-            },
-            timestamp: AppOption {
-                option: Timestamp::Off,
-                status_prefix: "Timestamp ",
-            },
+            add_carriage_return: false,
+            add_line_feed: false,
+            local_echo: false,
+            timestamp: Timestamp::Off,
         };
         app.print_startup_stuff()?;
 
@@ -176,7 +246,7 @@ impl App {
         let msg = "help help help\n\r";
 
         self.tui.enter_alt()?;
-        self.state = AppState::MenuActive;
+        self.state = AppStates::MenuActive;
         self.tui.print_to_screen(msg)?;
 
         Ok(())
@@ -188,9 +258,9 @@ impl App {
         let str = String::from_utf8_lossy(&buf);
 
         // TODO instead of replace, use split?
-        if self.add_carriage_return.val() && str.contains('\n') {
+        if self.add_carriage_return && str.contains('\n') {
             self.tui.print_or_queue(&str.replace('\n', "\r\n"))?;
-        } else if self.add_line_feed.val() && str.contains('\r') {
+        } else if self.add_line_feed && str.contains('\r') {
             self.tui.print_or_queue(&str.replace('r', "\r\n"))?;
         } else {
             self.tui.print_or_queue(&str)?;
@@ -205,34 +275,63 @@ impl App {
 
     fn send_serial_data(&mut self, port: &mut SerialStream, data: Vec<u8>) -> Result<()> {
         port.write_all(&data)?;
-        if self.local_echo.val() {
+        if self.local_echo {
             self.print_incoming(data)?;
         }
         Ok(())
+    }
+
+    fn handle_command(&mut self, cmd: Commands) -> Result<AppResults> {
+        let mut result = AppResults::None;
+
+        match cmd {
+            Commands::Quit | Commands::Exit => result = AppResults::Quit,
+            Commands::ToggleLocalEcho => {
+                self.local_echo = !self.local_echo;
+                self.tui.set_status("bla", self.local_echo.val_to_str())?;
+            },
+            Commands::ToggleLineFeed => {
+                self.add_line_feed = !self.add_line_feed;
+                self.tui.set_status("bla", self.add_line_feed.val_to_str())?;
+            },
+            Commands::ToggleCarriageReturn => {
+                self.add_carriage_return = !self.add_carriage_return;
+                self.tui.set_status("bla", self.add_carriage_return.val_to_str())?;
+            },
+            Commands::ToggleTimestamp => {
+                self.timestamp = self.timestamp.next();
+                self.tui.set_prefix_timestamp(self.timestamp);
+                self.tui.set_status("sdfg", self.timestamp.val_to_str())?;
+            },
+            Commands::ClearScreen => self.tui.clear_screen()?,
+            Commands::ShowHelp => self.show_help()?,
+        }
+
+        Ok(result)
     }
 
     pub fn handle_key_event(
         &mut self,
         port: &mut SerialStream,
         key_event: KeyEvent,
-    ) -> Result<AppResult> {
-        let mut result = AppResult::None;
+    ) -> Result<AppResults> {
+        let mut result = AppResults::None;
 
         match self.state {
-            AppState::Receiving => {
+            AppStates::Receiving => {
                 assert!(!self.tui.on_alternate_screen());
 
                 /* Check for CTRL-A */
                 if is_ctrl_a(key_event) {
-                    self.state = AppState::CatchKey;
+                    self.state = AppStates::CatchKey;
                     self.tui.set_status_msg("CTRL-A Z for help")?;
                 } else if let Some(data) = key_event_to_bytes(key_event)? {
                     self.send_serial_data(port, data)?;
                 }
             },
-            AppState::CatchKey => {
+            AppStates::CatchKey => {
                 /* Leave the state */
-                self.state = AppState::Receiving;
+                self.state = AppStates::Receiving;
 
                 if is_ctrl_a(key_event) {
                     /* Got CTRL-A for the second time, send it */
@@ -240,19 +339,8 @@ impl App {
                         self.send_serial_data(port, data)?;
                     }
                 } else if let KeyCode::Char(c) = key_event.code {
-                    match c {
-                        'q' => result = AppResult::Quit,
-                        'x' => result = AppResult::Quit,
-                        'e' => self.toggle_option(AppOptions::LocalEcho)?,
-                        'a' => self.toggle_option(AppOptions::AddLineFeed)?,
-                        'u' => self.toggle_option(AppOptions::AddCarriageReturn)?,
-                        'n' => {
-                            self.toggle_option(AppOptions::Timestamp)?;
-                            self.tui.set_prefix_timestamp(self.timestamp.val());
-                        }
-                        'c' => self.tui.clear_screen()?,
-                        'z' => self.show_help()?,
-                        _ => (),
+                    if let Some(cmd) = get_command(c) {
+                        result = self.handle_command(cmd)?;
                     }
                 } else {
                     /* Ignore other keys like 'enter' */
@@ -263,10 +351,10 @@ impl App {
                     self.tui.hide_status()?;
                 }
             },
-            AppState::MenuActive => {
+            AppStates::MenuActive => {
                 /* For now, leave the menu on any key */
                 self.tui.leave_alt()?;
-                self.state = AppState::Receiving;
+                self.state = AppStates::Receiving;
             },
         }
         Ok(result)
@@ -274,19 +362,6 @@ impl App {
 
     pub fn cleanup(&mut self) -> Result<()> {
         self.tui.cleanup()?;
-        Ok(())
-    }
-
-    fn toggle_option(&mut self, option: AppOptions) -> Result<()> {
-        let (prefix, val) = match option {
-            AppOptions::AddCarriageReturn => self.add_carriage_return.toggle_and_get_status_msg(),
-            AppOptions::AddLineFeed => self.add_line_feed.toggle_and_get_status_msg(),
-            AppOptions::LocalEcho => self.local_echo.toggle_and_get_status_msg(),
-            AppOptions::Timestamp => self.timestamp.toggle_and_get_status_msg(),
-        };
-        self.tui.set_status(prefix, val)?;
-        self.status_delay = STATUS_DELAY_TICKS;
-
         Ok(())
     }
 }

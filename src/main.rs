@@ -18,7 +18,7 @@ use tokio::signal::windows::ctrl_close;
 
 mod app;
 mod tui;
-use app::{App, AppResult, TICKS_MS};
+use app::{App, AppResults, TICKS_MS};
 
 #[cfg(unix)]
 const DEFAULT_TTY: &str = "/dev/ttyS0";
@@ -37,13 +37,13 @@ pub struct Cli {
     #[arg(short, long, default_value_t = 115200)]
     baud_rate: u32,
 
-    #[arg(short = 'B', long, default_value = "eight",
-        value_parser = clap::builder::PossibleValuesParser::new(["five", "six", "seven", "eight"])
+    #[arg(short = 'B', long, default_value = "8",
+        value_parser = clap::builder::PossibleValuesParser::new(["5", "6", "7", "8"])
             .map(|s| match s.as_str() {
-            "five" => tokio_serial::DataBits::Five,
-            "six" => tokio_serial::DataBits::Six,
-            "seven" => tokio_serial::DataBits::Seven,
-            "eight" => tokio_serial::DataBits::Eight,
+            "5" => tokio_serial::DataBits::Five,
+            "6" => tokio_serial::DataBits::Six,
+            "7" => tokio_serial::DataBits::Seven,
+            "8" => tokio_serial::DataBits::Eight,
             _ => unreachable!(),
         }))]
     data_bits: tokio_serial::DataBits,
@@ -83,7 +83,7 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
     let mut reader = EventStream::new();
     let mut interval = interval(Duration::from_millis(TICKS_MS));
 
-    /* No idea of this works on windows... */
+    /* No idea if this works on windows... */
     #[cfg(unix)]
     let mut sig_term = signal(SignalKind::terminate())?;
     #[cfg(windows)]
@@ -122,8 +122,8 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
                     Some(Ok(event)) => {
                         if let Event::Key(key_event) = event {
                             match app.handle_key_event(port, key_event)? {
-                                AppResult::Quit => break,
-                                AppResult::None => (),
+                                AppResults::Quit => break,
+                                AppResults::None => (),
                             }
                         }
                         // TODO handle other events (like resize)?
