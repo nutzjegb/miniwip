@@ -252,16 +252,21 @@ impl App {
         Ok(())
     }
 
-    fn print_incoming(&mut self, buf: Vec<u8>) -> Result<()> {
+    fn print_incoming(&mut self, buf: &Vec<u8>) -> Result<()> {
         // TODO refactor vec to u8
 
         let str = String::from_utf8_lossy(&buf);
+
+        //crappy hex
+        // let dg = str.as_bytes();
+        // let bla = format!("{dg:x?}\n\r");
+        // self.tui.print_or_queue(&bla)?;
 
         // TODO instead of replace, use split?
         if self.add_carriage_return && str.contains('\n') {
             self.tui.print_or_queue(&str.replace('\n', "\r\n"))?;
         } else if self.add_line_feed && str.contains('\r') {
-            self.tui.print_or_queue(&str.replace('r', "\r\n"))?;
+            self.tui.print_or_queue(&str.replace('\r', "\r\n"))?;
         } else {
             self.tui.print_or_queue(&str)?;
         }
@@ -269,11 +274,11 @@ impl App {
     }
 
     pub fn handle_serial_event(&mut self, data: &[u8]) -> Result<()> {
-        self.print_incoming(data.to_vec())?;
+        self.print_incoming(&data.to_vec())?;
         Ok(())
     }
 
-    fn send_serial_data(&mut self, port: &mut SerialStream, data: Vec<u8>) -> Result<()> {
+    fn send_serial_data(&mut self, port: &mut SerialStream, data: &Vec<u8>) -> Result<()> {
         port.write_all(&data)?;
         if self.local_echo {
             self.print_incoming(data)?;
@@ -326,7 +331,12 @@ impl App {
                     self.state = AppStates::CatchKey;
                     self.tui.set_status_msg("CTRL-A Z for help")?;
                 } else if let Some(data) = key_event_to_bytes(key_event)? {
-                    self.send_serial_data(port, data)?;
+                    self.send_serial_data(port, &data)?;
+                    // TODO: add separate option?
+                    // (currently like minicom, one option for both receiving and sending)
+                    if self.add_line_feed && data[0] == b'\r' {
+                        self.send_serial_data(port, &vec![b'\n'])?;
+                    }
                 }
             },
             AppStates::CatchKey => {
@@ -336,7 +346,7 @@ impl App {
                 if is_ctrl_a(key_event) {
                     /* Got CTRL-A for the second time, send it */
                     if let Some(data) = key_event_to_bytes(key_event)? {
-                        self.send_serial_data(port, data)?;
+                        self.send_serial_data(port, &data)?;
                     }
                 } else if let KeyCode::Char(c) = key_event.code {
                     if let Some(cmd) = get_command(c) {
@@ -379,8 +389,7 @@ fn key_event_to_bytes(key_event: KeyEvent) -> Result<Option<Vec<u8>>> {
     // TODO verify against u-boot or something similar
     let key_str: Option<Vec<u8>> = match key_event.code {
         KeyCode::Backspace => Some(Vec::from([b'\x08'])),
-        //TODO Make this an option?
-        KeyCode::Enter => Some(Vec::from([b'\n'])),
+        KeyCode::Enter => Some(Vec::from([b'\r'])),
         KeyCode::Left => Some(Vec::from([esc, b'\x5b', b'\x44'])),
         KeyCode::Right => Some(Vec::from([esc, b'\x5b', b'\x43'])),
         KeyCode::Up => Some(Vec::from([esc, b'\x5b', b'\x41'])),
