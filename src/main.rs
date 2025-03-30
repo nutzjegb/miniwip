@@ -120,13 +120,22 @@ async fn event_handler(app: &mut App, port: &mut SerialStream) -> Result<()> {
             maybe_event = reader.next() => {
                 match maybe_event {
                     Some(Ok(event)) => {
+                        //only on press to work with windows, see https://ratatui.rs/faq/
+                        // CrosstermEvent::Key(key) => {
+                        //     if key.kind == KeyEventKind::Press {
+                        //       event_tx.send(Event::Key(key)).unwrap();
+                        //     }
+                        //   },
                         if let Event::Key(key_event) = event {
                             match app.handle_key_event(port, key_event)? {
                                 AppResults::Quit => break,
                                 AppResults::None => (),
                             }
                         }
-                        // TODO handle other events (like resize)?
+                        else if let Event::Resize(_, _) = event {
+                            app.handle_resize()?;
+                        }
+                        // TODO handle other events?
                     },
                     Some(Err(e)) => {
                         println!("Error: {:?}", e);

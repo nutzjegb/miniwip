@@ -90,17 +90,22 @@ fn get_command(cmd: char) -> Option<Commands> {
 //     }
 // }
 
-pub struct App {
-    state: AppStates,
-    tui: Tui,
-    cli: Cli,
-    status_delay: u64,
+struct MyOptions {
     add_carriage_return: bool,
     add_line_feed: bool,
     local_echo: bool,
     timestamp: Timestamp,
 }
 
+pub struct App {
+    state: AppStates,
+    tui: Tui,
+    cli: Cli,
+    status_delay: u64,
+    opts: MyOptions,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub enum AppStates {
     Receiving,
     MenuActive,
@@ -189,15 +194,18 @@ impl App {
     pub fn init(cli: Cli) -> Result<App> {
         let tui = Tui::init()?;
 
+        let opts = MyOptions {
+            add_carriage_return: false,
+            add_line_feed: false,
+            local_echo: false,
+            timestamp: Timestamp::Off,
+        };
         let mut app = App {
             state: AppStates::Receiving,
             tui,
             cli,
             status_delay: 0,
-            add_carriage_return: false,
-            add_line_feed: false,
-            local_echo: false,
-            timestamp: Timestamp::Off,
+            opts,
         };
         app.print_startup_stuff()?;
 
@@ -205,6 +213,11 @@ impl App {
     }
 
     pub fn tick(&mut self) -> Result<()> {
+        if self.state == AppStates::MenuActive {
+            self.tui.draw_ui()?;
+            self.status_delay = 0;
+        }
+
         if self.status_delay != 0 {
             self.status_delay -= 1;
             if self.status_delay == 0 {
@@ -243,19 +256,17 @@ impl App {
             return Ok(());
         }
 
-        let msg = "help help help\n\r";
-
         self.tui.enter_alt()?;
         self.state = AppStates::MenuActive;
-        self.tui.print_to_screen(msg)?;
+        self.tui.draw_ui()?;
 
         Ok(())
     }
 
-    fn print_incoming(&mut self, buf: &Vec<u8>) -> Result<()> {
+    fn print_incoming(&mut self, buf: &[u8]) -> Result<()> {
         // TODO refactor vec to u8
 
-        let str = String::from_utf8_lossy(&buf);
+        let str = String::from_utf8_lossy(buf);
 
         //crappy hex
         // let dg = str.as_bytes();
@@ -263,9 +274,9 @@ impl App {
         // self.tui.print_or_queue(&bla)?;
 
         // TODO instead of replace, use split?
-        if self.add_carriage_return && str.contains('\n') {
+        if self.opts.add_carriage_return && str.contains('\n') {
             self.tui.print_or_queue(&str.replace('\n', "\r\n"))?;
-        } else if self.add_line_feed && str.contains('\r') {
+        } else if self.opts.add_line_feed && str.contains('\r') {
             self.tui.print_or_queue(&str.replace('\r', "\r\n"))?;
         } else {
             self.tui.print_or_queue(&str)?;
@@ -274,13 +285,13 @@ impl App {
     }
 
     pub fn handle_serial_event(&mut self, data: &[u8]) -> Result<()> {
-        self.print_incoming(&data.to_vec())?;
+        self.print_incoming(data)?;
         Ok(())
     }
 
-    fn send_serial_data(&mut self, port: &mut SerialStream, data: &Vec<u8>) -> Result<()> {
-        port.write_all(&data)?;
-        if self.local_echo {
+    fn send_serial_data(&mut self, port: &mut SerialStream, data: &[u8]) -> Result<()> {
+        port.write_all(data)?;
+        if self.opts.local_echo {
             self.print_incoming(data)?;
         }
         Ok(())
@@ -292,21 +303,21 @@ impl App {
         match cmd {
             Commands::Quit | Commands::Exit => result = AppResults::Quit,
             Commands::ToggleLocalEcho => {
-                self.local_echo = !self.local_echo;
-                self.tui.set_status("bla", self.local_echo.val_to_str())?;
+                self.opts.local_echo = !self.opts.local_echo;
+                self.tui.set_status("bla", self.opts.local_echo.val_to_str())?;
             },
             Commands::ToggleLineFeed => {
-                self.add_line_feed = !self.add_line_feed;
-                self.tui.set_status("bla", self.add_line_feed.val_to_str())?;
+                self.opts.add_line_feed = !self.opts.add_line_feed;
+                self.tui.set_status("bla", self.opts.add_line_feed.val_to_str())?;
             },
             Commands::ToggleCarriageReturn => {
-                self.add_carriage_return = !self.add_carriage_return;
-                self.tui.set_status("bla", self.add_carriage_return.val_to_str())?;
+                self.opts.add_carriage_return = !self.opts.add_carriage_return;
+                self.tui.set_status("bla", self.opts.add_carriage_return.val_to_str())?;
             },
             Commands::ToggleTimestamp => {
-                self.timestamp = self.timestamp.next();
-                self.tui.set_prefix_timestamp(self.timestamp);
-                self.tui.set_status("sdfg", self.timestamp.val_to_str())?;
+                self.opts.timestamp = self.opts.timestamp.next();
+                self.tui.set_prefix_timestamp(self.opts.timestamp);
+                self.tui.set_status("sdfg", self.opts.timestamp.val_to_str())?;
             },
             Commands::ClearScreen => self.tui.clear_screen()?,
             Commands::ShowHelp => self.show_help()?,
@@ -334,8 +345,8 @@ impl App {
                     self.send_serial_data(port, &data)?;
                     // TODO: add separate option?
                     // (currently like minicom, one option for both receiving and sending)
-                    if self.add_line_feed && data[0] == b'\r' {
-                        self.send_serial_data(port, &vec![b'\n'])?;
+                    if self.opts.add_line_feed && data[0] == b'\r' {
+                        self.send_serial_data(port, &[b'\n'])?;
                     }
                 }
             },
@@ -368,6 +379,13 @@ impl App {
             },
         }
         Ok(result)
+    }
+
+    pub fn handle_resize(&mut self) -> Result<()> {
+        if self.state == AppStates::MenuActive {
+            self.tui.resize()?;
+        }
+        Ok(())
     }
 
     pub fn cleanup(&mut self) -> Result<()> {

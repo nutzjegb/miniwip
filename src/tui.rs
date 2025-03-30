@@ -1,7 +1,8 @@
 use crate::app::Timestamp;
 use anyhow::Result;
 use crossterm::{cursor, execute, queue, style::Print, terminal, tty::IsTty};
-use std::{collections::VecDeque, io::{stdout, Write}};
+use ratatui::{backend::CrosstermBackend, layout::{Constraint, Direction, Layout}, widgets::{Block, Borders, Paragraph}, Frame, Terminal};
+use std::{collections::VecDeque, io::{stdout, Stdout, Write}};
 use time::{macros::format_description, OffsetDateTime};
 
 struct ToPrint {
@@ -21,6 +22,7 @@ pub struct Tui {
     queue: VecDeque<ToPrint>,
 
     // cur_row: u16,
+    terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 
 const FORMAT_SIMPLE: &[time::format_description::FormatItem<'static>] =
@@ -43,18 +45,22 @@ impl crossterm::Command for PrintTime {
 
 impl Tui {
     pub fn init() -> Result<Tui> {
-        let stdout = stdout();
+        let out = stdout();
+        // TODO: Always enable raw? or only on is_tty? (cant remember)
         terminal::enable_raw_mode()?;
 
+        let term = Terminal::new(CrosstermBackend::new(stdout()))?;
+
         Ok(Tui {
-            is_tty: stdout.is_tty(),
-            stdout,
+            is_tty: out.is_tty(),
+            stdout: out,
             // status_msg: "".to_string(),
             on_alternate_screen: false,
             on_newline: false,
             prefix_timestamp: Timestamp::Off,
             // cur_row: 0,
             queue: VecDeque::new(),
+            terminal: term,
         })
     }
 
@@ -139,6 +145,8 @@ impl Tui {
     }
 
     pub fn print_to_screen(&mut self, str: &str) -> Result<()> {
+        assert!(!self.on_alternate_screen);
+
         execute!(self.stdout, Print(str))?;
         Ok(())
     }
@@ -199,6 +207,8 @@ impl Tui {
     }
 
     pub fn clear_screen(&mut self) -> Result<()> {
+        assert!(!self.on_alternate_screen);
+
         execute!(
             self.stdout,
             terminal::Clear(terminal::ClearType::All),
@@ -223,6 +233,7 @@ impl Tui {
                 cursor::MoveTo(0, 0)
             )?;
             self.on_alternate_screen = true;
+            self.terminal.clear()?;
         }
         Ok(())
     }
@@ -244,11 +255,50 @@ impl Tui {
     pub fn on_alternate_screen(&self) -> bool {
         self.on_alternate_screen
     }
+
+    pub fn draw_ui(&mut self) -> Result<()> {
+        assert!(self.on_alternate_screen);
+        self.terminal.draw(ui)?;
+        Ok(())
+    }
+
+    pub fn resize(&mut self) -> Result<()> {
+        assert!(self.on_alternate_screen);
+        self.terminal.autoresize()?;
+        Ok(())
+    }
+}
+
+fn ui(frame: &mut Frame) {
+    // frame.render_widget(
+    //     Paragraph::new("Hello World!")
+    //         .block(Block::default().title("Greeting").borders(Borders::ALL)),
+    //     frame.size(),
+    // );
+    let inner_layout = Layout::new(
+        Direction::Horizontal, [
+            Constraint::Percentage(33), Constraint::Percentage(33), Constraint::Percentage(33)],
+    ).split(frame.size());
+    frame.render_widget(
+        Block::default().borders(Borders::ALL).title("Left"),
+        inner_layout[0],
+    );
+    frame.render_widget(
+        Block::default().borders(Borders::ALL).title("mid"),
+        inner_layout[1],
+    );
+    frame.render_widget(
+        Block::default().borders(Borders::ALL).title("Right"),
+        inner_layout[2],
+    );
 }
 
 impl Drop for Tui {
     fn drop(&mut self) {
         /* Ignore errors here */
+        // TODO: move to cleanup func or something?
+        // (logic is a bit entangled)
+        // TODO: if self.is_tty ?
         let _ = self.leave_alt();
         let _ = terminal::disable_raw_mode();
     }
